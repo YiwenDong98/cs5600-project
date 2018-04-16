@@ -52,6 +52,16 @@
 #include "migration/colo.h"
 #include "migration/block.h"
 
+// Compiler macro for print statements
+#ifndef PRINTOUT
+#define PRINTOUT 0
+#if PRINTOUT
+#include <stdio.h>
+#define PRINTF(a) printf a
+#else
+#define PRINTF(a)
+#endif
+#endif
 // Compiler macro for bench statements
 #ifndef BENCHOUT
 #define BENCHOUT 1
@@ -785,18 +795,64 @@ static int save_xbzrle_page(RAMState *rs, uint8_t **current_data,
  */
 static inline
 unsigned long migration_bitmap_find_dirty(RAMState *rs, RAMBlock *rb,
-                                          unsigned long start)
+                                          unsigned long start, bool last_stage)
 {
     unsigned long size = rb->used_length >> TARGET_PAGE_BITS;
     unsigned long *bitmap = rb->bmap;
+    unsigned long *lastmap = rb->lmap;
     unsigned long next;
 
-    if (rs->ram_bulk_stage && start > 0) {
-        next = start + 1;
-    } else {
-        next = find_next_bit(bitmap, size, start);
-    }
+    //TODO change to look one by one and update lmap
+    if (last_stage) {
+    	PRINTF(("Last Stage\n"));
 
+        if (rs->ram_bulk_stage && start > 0) {
+            next = start + 1;
+        } else {
+            next = find_next_bit(bitmap, size, start);
+        }
+    } else {
+        if (rs->ram_bulk_stage && start > 0) {
+            next = start + 1;
+        } else {
+        	next = find_next_bit(bitmap, size, start);
+        	while (start < size) {
+            	unsigned long next_bit = find_next_bit(bitmap, size, start);
+            	unsigned long next_zero_bit = find_next_zero_bit(bitmap, size, start);
+                PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit, next_zero_bit));
+            	if (next_bit < next_zero_bit) {
+            		// Found dirty bit, if last also dirty, do nothing
+            		if (size == next_bit) {
+            			PRINTF(("LAST BIT\n"));
+            		}
+                	unsigned long next_bit_last = find_next_bit(lastmap, size, start);
+                	unsigned long next_zero_bit_last = find_next_zero_bit(lastmap, size, start);
+                    PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit_last, next_zero_bit_last));
+        			//assert(find_next_zero_bit(lastmap, size, start) == );
+            		set_bit(next_bit, lastmap);
+            		if (next_bit_last < next_zero_bit_last) {
+            			//last is dirty
+            			PRINTF(("This dirty, last dirty\n"));
+            			assert(next_bit == next_bit_last);
+            			assert(start == next_bit_last);
+            			start = next_bit_last + 1;
+            		} else {
+            			// Last is not dirty
+            			PRINTF(("This dirty, last not dirty\n"));
+            			assert(next_bit == next_zero_bit_last);
+            			next = next_bit;
+            			break;
+            		}
+            	} else {
+        			PRINTF(("This not dirty\n"));
+            		// Found clean bit, clear last bit
+                	clear_bit(next_zero_bit, lastmap);
+        			start = next_zero_bit + 1;
+            	}
+        	}
+        }
+    }
+    PRINTF(("Find Dirty of RAMBlock start %lx offset %lx\n", start, next));
     return next;
 }
 
@@ -806,6 +862,7 @@ static inline bool migration_bitmap_clear_dirty(RAMState *rs,
 {
     bool ret;
 
+    PRINTF(("Clear Dirty of RAMBlock offset %lx with dirty bitmap %x\n", page, test_bit(page, rb->bmap)));
     ret = test_and_clear_bit(page, rb->bmap);
 
     if (ret) {
@@ -1219,9 +1276,9 @@ static int ram_save_compressed_page(RAMState *rs, PageSearchStatus *pss,
  * @pss: data about the state of the current dirty page scan
  * @again: set to false if the search has scanned the whole of RAM
  */
-static bool find_dirty_block(RAMState *rs, PageSearchStatus *pss, bool *again)
+static bool find_dirty_block(RAMState *rs, PageSearchStatus *pss, bool *again, bool last_stage)
 {
-    pss->page = migration_bitmap_find_dirty(rs, pss->block, pss->page);
+    pss->page = migration_bitmap_find_dirty(rs, pss->block, pss->page, last_stage);
     if (pss->complete_round && pss->block == rs->last_seen_block &&
         pss->page >= rs->last_page) {
         /*
@@ -1463,10 +1520,12 @@ err:
 static int ram_save_target_page(RAMState *rs, PageSearchStatus *pss,
                                 bool last_stage)
 {
+	PRINTF(("        Target Save Page\n"));
     int res = 0;
 
     /* Check the pages is dirty and if it is send it */
     if (migration_bitmap_clear_dirty(rs, pss->block, pss->page)) {
+    	PRINTF(("        Target Save Page saved\n"));
         /*
          * If xbzrle is on, stop using the data compression after first
          * round of migration even if compression is enabled. In theory,
@@ -1485,6 +1544,8 @@ static int ram_save_target_page(RAMState *rs, PageSearchStatus *pss,
         if (pss->block->unsentmap) {
             clear_bit(pss->page, pss->block->unsentmap);
         }
+    } else {
+    	PRINTF(("        Target Save Page not saved\n"));
     }
 
     return res;
@@ -1511,11 +1572,13 @@ static int ram_save_target_page(RAMState *rs, PageSearchStatus *pss,
 static int ram_save_host_page(RAMState *rs, PageSearchStatus *pss,
                               bool last_stage)
 {
+	PRINTF(("      Find Save Page\n"));
     int tmppages, pages = 0;
     size_t pagesize_bits =
         qemu_ram_pagesize(pss->block) >> TARGET_PAGE_BITS;
 
     do {
+    	PRINTF(("        Find Save Page loop\n"));
         tmppages = ram_save_target_page(rs, pss, last_stage);
         if (tmppages < 0) {
             return tmppages;
@@ -1547,6 +1610,7 @@ static int ram_save_host_page(RAMState *rs, PageSearchStatus *pss,
 
 static int ram_find_and_save_block(RAMState *rs, bool last_stage)
 {
+	  PRINTF(("Find Save Block\n"));
     PageSearchStatus pss;
     int pages = 0;
     bool again, found;
@@ -1565,15 +1629,18 @@ static int ram_find_and_save_block(RAMState *rs, bool last_stage)
     }
 
     do {
+    	  PRINTF(("  Find Save Block loop\n"));
         again = true;
         found = get_queued_page(rs, &pss);
 
         if (!found) {
+        	  PRINTF(("    Find Save Block loop not found\n"));
             /* priority queue empty, so just search for something dirty */
-            found = find_dirty_block(rs, &pss, &again);
+            found = find_dirty_block(rs, &pss, &again, last_stage);
         }
 
         if (found) {
+        	  PRINTF(("    Find Save Block loop is found\n"));
             pages = ram_save_host_page(rs, &pss, last_stage);
         }
     } while (!pages && again);
@@ -2169,7 +2236,11 @@ static void ram_list_init_bitmaps(void)
         QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
             pages = block->max_length >> TARGET_PAGE_BITS;
             block->bmap = bitmap_new(pages);
+            //TODO init lmap
+            //Done
+            block->lmap = bitmap_new(pages);
             bitmap_set(block->bmap, 0, pages);
+            bitmap_set(block->lmap, 0, pages);
             if (migrate_postcopy_ram()) {
                 block->unsentmap = bitmap_new(pages);
                 bitmap_set(block->unsentmap, 0, pages);
@@ -2227,8 +2298,18 @@ static int ram_init_all(RAMState **rsp)
  */
 static int ram_save_setup(QEMUFile *f, void *opaque)
 {
+	PRINTF(("Setup save ram\n"));
+
+
     RAMState **rsp = opaque;
     RAMBlock *block;
+
+	//print out the ram_list
+    rcu_read_lock();
+	RAMBLOCK_FOREACH(block) {
+		PRINTF(("Printing Block\n"));
+	}
+    rcu_read_unlock();
 
     /* migration has already setup the bitmap, reuse it. */
     if (!migration_in_colo_state()) {
@@ -2272,6 +2353,7 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
  */
 static int ram_save_iterate(QEMUFile *f, void *opaque)
 {
+	PRINTF(("Iterate save ram\n"));
     RAMState **temp = opaque;
     RAMState *rs = *temp;
     int ret;
@@ -2300,6 +2382,8 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
     i = 0;
     while ((ret = qemu_file_rate_limit(f)) == 0) {
         int pages;
+
+        PRINTF(("Iterate send number: %i\n", i));
 
         pages = ram_find_and_save_block(rs, false);
         /* no more pages to sent */
@@ -2356,6 +2440,8 @@ out:
  */
 static int ram_save_complete(QEMUFile *f, void *opaque)
 {
+	PRINTF(("Complete save ram\n"));
+
     RAMState **temp = opaque;
     RAMState *rs = *temp;
 
