@@ -52,6 +52,17 @@
 #include "migration/colo.h"
 #include "migration/block.h"
 
+// Compiler macro for bench statements
+#ifndef BENCHOUT
+#define BENCHOUT 1
+#if BENCHOUT
+#include <stdio.h>
+#define BENCH(a) printf a
+#else
+#define BENCH(a)
+#endif
+#endif
+
 /***********************************************************/
 /* ram save/restore */
 
@@ -1229,6 +1240,11 @@ static bool find_dirty_block(RAMState *rs, PageSearchStatus *pss, bool *again)
             pss->block = QLIST_FIRST_RCU(&ram_list.blocks);
             /* Flag that we've looped */
             pss->complete_round = true;
+
+            BENCH(("Iterate: %lu\n", rs->iterations));
+            BENCH(("Round: %lu\n", rs->migration_dirty_pages));
+            BENCH(("Complete round\n"));
+
             rs->ram_bulk_stage = false;
             if (migrate_use_xbzrle()) {
                 /* If xbzrle is on, stop using the data compression at this
