@@ -803,57 +803,63 @@ unsigned long migration_bitmap_find_dirty(RAMState *rs, RAMBlock *rb,
     unsigned long next;
 
     //TODO change to look one by one and update lmap
+    if (rs->ram_bulk_stage) {
+    	if (start > 0) {
+        	PRINTF(("Bulk Stage >0\n"));
+        	PRINTF(("START: %lu\n", start));
+    		clear_bit(start + 1, lastmap);
+        	return start + 1;
+    	} else {
+        	PRINTF(("Bulk Stage 0\n"));
+        	PRINTF(("START: %lu\n", start));
+    		clear_bit(find_next_bit(bitmap, size, start), lastmap);
+            return find_next_bit(bitmap, size, start);
+    	}
+    }
     if (last_stage) {
     	PRINTF(("Last Stage\n"));
-
-        if (rs->ram_bulk_stage && start > 0) {
-            next = start + 1;
-        } else {
-            next = find_next_bit(bitmap, size, start);
-        }
-    } else {
-        if (rs->ram_bulk_stage && start > 0) {
-            next = start + 1;
-        } else {
-        	next = find_next_bit(bitmap, size, start);
-        	while (start < size) {
-            	unsigned long next_bit = find_next_bit(bitmap, size, start);
-            	unsigned long next_zero_bit = find_next_zero_bit(bitmap, size, start);
-                PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit, next_zero_bit));
-            	if (next_bit < next_zero_bit) {
-            		// Found dirty bit, if last also dirty, do nothing
-            		if (size == next_bit) {
-            			PRINTF(("LAST BIT\n"));
-            		}
-                	unsigned long next_bit_last = find_next_bit(lastmap, size, start);
-                	unsigned long next_zero_bit_last = find_next_zero_bit(lastmap, size, start);
-                    PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit_last, next_zero_bit_last));
-        			//assert(find_next_zero_bit(lastmap, size, start) == );
-            		set_bit(next_bit, lastmap);
-            		if (next_bit_last < next_zero_bit_last) {
-            			//last is dirty
-            			PRINTF(("This dirty, last dirty\n"));
-            			assert(next_bit == next_bit_last);
-            			assert(start == next_bit_last);
-            			start = next_bit_last + 1;
-            		} else {
-            			// Last is not dirty
-            			PRINTF(("This dirty, last not dirty\n"));
-            			assert(next_bit == next_zero_bit_last);
-            			next = next_bit;
-            			break;
-            		}
-            	} else {
-        			PRINTF(("This not dirty\n"));
-            		// Found clean bit, clear last bit
-                	clear_bit(next_zero_bit, lastmap);
-        			start = next_zero_bit + 1;
-            	}
-        	}
-        }
+    	PRINTF(("START: %lu\n", start));
+        return find_next_bit(bitmap, size, start);
     }
-    PRINTF(("Find Dirty of RAMBlock start %lx offset %lx\n", start, next));
-    return next;
+    while (start < size) {
+    	PRINTF(("START: %lu\n", start));
+    	unsigned long next_bit = find_next_bit(bitmap, size, start);
+    	unsigned long next_zero_bit = find_next_zero_bit(bitmap, size, start);
+    	//PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit, next_zero_bit));
+    	if (next_bit < next_zero_bit) {
+    		// Found dirty bit, if last also dirty, do nothing
+    		unsigned long next_bit_last = find_next_bit(lastmap, size, start);
+    		unsigned long next_zero_bit_last = find_next_zero_bit(lastmap, size, start);
+    		//PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit_last, next_zero_bit_last));
+    		set_bit(next_bit, lastmap);
+    		if (next_bit_last < next_zero_bit_last) {
+    			//last is dirty
+    			PRINTF(("This dirty, last dirty\n"));
+    			//assert(next_bit == next_bit_last); FACT
+    			//assert(start == next_bit_last); FACT
+    			start = next_bit_last + 1;
+    		} else {
+    			// Last is not dirty
+    			PRINTF(("This dirty, last not dirty\n"));
+    			//assert(next_bit == next_zero_bit_last); FACT
+    			next = next_bit;
+    		    PRINTF(("Find Dirty of RAMBlock start %lx offset %lx\n", start, next));
+    			return next;
+    		}
+    	} else {
+    		// Found clean bit, clear last bit
+    		if (test_bit(next_zero_bit, lastmap)) {
+        		PRINTF(("This not dirty, last dirty\n"));
+    			set_bit(next_zero_bit, bitmap);
+        		clear_bit(next_zero_bit, lastmap);
+        		return next_zero_bit;
+    		}
+    		PRINTF(("This not dirty, last clean\n"));
+    		clear_bit(next_zero_bit, lastmap);
+    		start = next_zero_bit + 1;
+    	}
+    }
+    return size;
 }
 
 static inline bool migration_bitmap_clear_dirty(RAMState *rs,
@@ -862,7 +868,7 @@ static inline bool migration_bitmap_clear_dirty(RAMState *rs,
 {
     bool ret;
 
-    PRINTF(("Clear Dirty of RAMBlock offset %lx with dirty bitmap %x\n", page, test_bit(page, rb->bmap)));
+    //PRINTF(("Clear Dirty of RAMBlock offset %lx with dirty bitmap %x\n", page, test_bit(page, rb->bmap)));
     ret = test_and_clear_bit(page, rb->bmap);
 
     if (ret) {
@@ -1520,12 +1526,12 @@ err:
 static int ram_save_target_page(RAMState *rs, PageSearchStatus *pss,
                                 bool last_stage)
 {
-	PRINTF(("        Target Save Page\n"));
+	//PRINTF(("        Target Save Page\n"));
     int res = 0;
 
     /* Check the pages is dirty and if it is send it */
     if (migration_bitmap_clear_dirty(rs, pss->block, pss->page)) {
-    	PRINTF(("        Target Save Page saved\n"));
+    	//PRINTF(("        Target Save Page saved\n"));
         /*
          * If xbzrle is on, stop using the data compression after first
          * round of migration even if compression is enabled. In theory,
@@ -1545,7 +1551,7 @@ static int ram_save_target_page(RAMState *rs, PageSearchStatus *pss,
             clear_bit(pss->page, pss->block->unsentmap);
         }
     } else {
-    	PRINTF(("        Target Save Page not saved\n"));
+    	//PRINTF(("        Target Save Page not saved\n"));
     }
 
     return res;
@@ -1572,13 +1578,13 @@ static int ram_save_target_page(RAMState *rs, PageSearchStatus *pss,
 static int ram_save_host_page(RAMState *rs, PageSearchStatus *pss,
                               bool last_stage)
 {
-	PRINTF(("      Find Save Page\n"));
+	//PRINTF(("      Find Save Page\n"));
     int tmppages, pages = 0;
     size_t pagesize_bits =
         qemu_ram_pagesize(pss->block) >> TARGET_PAGE_BITS;
 
     do {
-    	PRINTF(("        Find Save Page loop\n"));
+    	//PRINTF(("        Find Save Page loop\n"));
         tmppages = ram_save_target_page(rs, pss, last_stage);
         if (tmppages < 0) {
             return tmppages;
@@ -1610,7 +1616,7 @@ static int ram_save_host_page(RAMState *rs, PageSearchStatus *pss,
 
 static int ram_find_and_save_block(RAMState *rs, bool last_stage)
 {
-	  PRINTF(("Find Save Block\n"));
+	//PRINTF(("Find Save Block\n"));
     PageSearchStatus pss;
     int pages = 0;
     bool again, found;
@@ -1629,18 +1635,18 @@ static int ram_find_and_save_block(RAMState *rs, bool last_stage)
     }
 
     do {
-    	  PRINTF(("  Find Save Block loop\n"));
+    	//PRINTF(("  Find Save Block loop\n"));
         again = true;
         found = get_queued_page(rs, &pss);
 
         if (!found) {
-        	  PRINTF(("    Find Save Block loop not found\n"));
+        	//PRINTF(("    Find Save Block loop not found\n"));
             /* priority queue empty, so just search for something dirty */
             found = find_dirty_block(rs, &pss, &again, last_stage);
         }
 
         if (found) {
-        	  PRINTF(("    Find Save Block loop is found\n"));
+        	//PRINTF(("    Find Save Block loop is found\n"));
             pages = ram_save_host_page(rs, &pss, last_stage);
         }
     } while (!pages && again);
@@ -2298,7 +2304,7 @@ static int ram_init_all(RAMState **rsp)
  */
 static int ram_save_setup(QEMUFile *f, void *opaque)
 {
-	PRINTF(("Setup save ram\n"));
+	//PRINTF(("Setup save ram\n"));
 
 
     RAMState **rsp = opaque;
@@ -2307,7 +2313,7 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
 	//print out the ram_list
     rcu_read_lock();
 	RAMBLOCK_FOREACH(block) {
-		PRINTF(("Printing Block\n"));
+		//PRINTF(("Printing Block\n"));
 	}
     rcu_read_unlock();
 
@@ -2353,7 +2359,7 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
  */
 static int ram_save_iterate(QEMUFile *f, void *opaque)
 {
-	PRINTF(("Iterate save ram\n"));
+	//PRINTF(("Iterate save ram\n"));
     RAMState **temp = opaque;
     RAMState *rs = *temp;
     int ret;
@@ -2383,7 +2389,7 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
     while ((ret = qemu_file_rate_limit(f)) == 0) {
         int pages;
 
-        PRINTF(("Iterate send number: %i\n", i));
+        //PRINTF(("Iterate send number: %i\n", i));
 
         pages = ram_find_and_save_block(rs, false);
         /* no more pages to sent */
@@ -2440,7 +2446,7 @@ out:
  */
 static int ram_save_complete(QEMUFile *f, void *opaque)
 {
-	PRINTF(("Complete save ram\n"));
+	//PRINTF(("Complete save ram\n"));
 
     RAMState **temp = opaque;
     RAMState *rs = *temp;
@@ -3130,3 +3136,4 @@ void ram_mig_init(void)
     qemu_mutex_init(&XBZRLE.lock);
     register_savevm_live(NULL, "ram", 0, 4, &savevm_ram_handlers, &ram_state);
 }
+
