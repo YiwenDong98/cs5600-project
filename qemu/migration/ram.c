@@ -801,36 +801,37 @@ unsigned long migration_bitmap_find_dirty(RAMState *rs, RAMBlock *rb,
     unsigned long *bitmap = rb->bmap;
     unsigned long *lastmap = rb->lmap;
     unsigned long next;
+    unsigned long init = start;
 
-    //TODO change to look one by one and update lmap
     if (rs->ram_bulk_stage) {
+    	// First run through(Bulk stage)
+    	//   All Memory are transfered.
     	if (start > 0) {
+    		// Get the rest of the area in sequence.
         	PRINTF(("Bulk Stage >0\n"));
-        	PRINTF(("START: %lu\n", start));
     		clear_bit(start + 1, lastmap);
         	return start + 1;
     	} else {
+    		// Find first area of the memory to transfer.
         	PRINTF(("Bulk Stage 0\n"));
-        	PRINTF(("START: %lu\n", start));
     		clear_bit(find_next_bit(bitmap, size, start), lastmap);
             return find_next_bit(bitmap, size, start);
     	}
     }
     if (last_stage) {
+    	// The last run though(Last stage)
+    	//   All the dirty pages are sent regardless of if it was previously dirty.
     	PRINTF(("Last Stage\n"));
-    	PRINTF(("START: %lu\n", start));
         return find_next_bit(bitmap, size, start);
     }
     while (start < size) {
-    	PRINTF(("START: %lu\n", start));
+    	// Incremental stage where dirty pages that was not dirty last time gets copied over.
     	unsigned long next_bit = find_next_bit(bitmap, size, start);
     	unsigned long next_zero_bit = find_next_zero_bit(bitmap, size, start);
-    	//PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit, next_zero_bit));
     	if (next_bit < next_zero_bit) {
-    		// Found dirty bit, if last also dirty, do nothing
+    		// Found dirty bit, if last also dirty, skip this page.
     		unsigned long next_bit_last = find_next_bit(lastmap, size, start);
     		unsigned long next_zero_bit_last = find_next_zero_bit(lastmap, size, start);
-    		//PRINTF(("Find Dirty of RAMBlock next bit %lx next zero %lx\n", next_bit_last, next_zero_bit_last));
     		set_bit(next_bit, lastmap);
     		if (next_bit_last < next_zero_bit_last) {
     			//last is dirty
@@ -839,16 +840,17 @@ unsigned long migration_bitmap_find_dirty(RAMState *rs, RAMBlock *rb,
     			//assert(start == next_bit_last); FACT
     			start = next_bit_last + 1;
     		} else {
-    			// Last is not dirty
+    			// Last is not dirty, migrate
     			PRINTF(("This dirty, last not dirty\n"));
     			//assert(next_bit == next_zero_bit_last); FACT
+    			assert(test_bit(next_bit, lastmap));
     			next = next_bit;
-    		    PRINTF(("Find Dirty of RAMBlock start %lx offset %lx\n", start, next));
     			return next;
     		}
     	} else {
     		// Found clean bit, clear last bit
     		if (test_bit(next_zero_bit, lastmap)) {
+    			// Last was dirty, migrate.
         		PRINTF(("This not dirty, last dirty\n"));
     			set_bit(next_zero_bit, bitmap);
         		clear_bit(next_zero_bit, lastmap);
@@ -859,7 +861,9 @@ unsigned long migration_bitmap_find_dirty(RAMState *rs, RAMBlock *rb,
     		start = next_zero_bit + 1;
     	}
     }
-    return size;
+    // Everything is clean.
+    PRINTF(("ALL CLEAN\n"));
+    return find_next_bit(bitmap, size, init);
 }
 
 static inline bool migration_bitmap_clear_dirty(RAMState *rs,
@@ -2242,10 +2246,10 @@ static void ram_list_init_bitmaps(void)
         QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
             pages = block->max_length >> TARGET_PAGE_BITS;
             block->bmap = bitmap_new(pages);
-            //TODO init lmap
-            //Done
+            // Create new last map
             block->lmap = bitmap_new(pages);
             bitmap_set(block->bmap, 0, pages);
+            // Set the map to be empty.
             bitmap_set(block->lmap, 0, pages);
             if (migrate_postcopy_ram()) {
                 block->unsentmap = bitmap_new(pages);
@@ -3136,4 +3140,3 @@ void ram_mig_init(void)
     qemu_mutex_init(&XBZRLE.lock);
     register_savevm_live(NULL, "ram", 0, 4, &savevm_ram_handlers, &ram_state);
 }
-
