@@ -12,10 +12,10 @@ There's videos that walks through cloning repo, building and installing
 QEMU and running benchmarks for live migration from start to finish.
 
 Videos
- - [Demo Custom QEMU Migration](https://www.youtube.com/edit?o=U&video_id=e1P9CLL__iY)
- - [Demo Custom QEMU Migration x4](https://www.youtube.com/edit?o=U&video_id=17HQJNdDvng)
- - [Demo Default QEMU Migration](https://www.youtube.com/edit?o=U&video_id=eg5G4wAcKyk)
- - [Demo Default QEMU Migration x4](https://www.youtube.com/edit?o=U&video_id=8nHlbjmhmnU)
+ - [Demo Custom QEMU Migration](https://youtu.be/e1P9CLL__iY)
+ - [Demo Custom QEMU Migration x4](https://youtu.be/17HQJNdDvng)
+ - [Demo Default QEMU Migration](https://youtu.be/eg5G4wAcKyk)
+ - [Demo Default QEMU Migration x4](https://youtu.be/8nHlbjmhmnU)
  
 The Default videos show building from the benchamrk branch which 
 contains the unchanged QEMU build and the Custom videos show building from 
