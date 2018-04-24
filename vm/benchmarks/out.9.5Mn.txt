@@ -1,0 +1,15 @@
+Iterate: 135378
+Round: 0
+Complete round
+Iterate: 135378
+Round: 13822
+Complete round
+Iterate: 149200
+Round: 2477
+Complete round
+Iterate: 150769
+Round: 1514
+Complete round
+Iterate: 150769
+Round: 0
+Complete round
